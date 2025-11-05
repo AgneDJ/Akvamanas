@@ -84,14 +84,30 @@ function trainFromRows(hist, model) {
     if (X.length < 5) continue;
 
     // Ridge: (X^T X + λI)^(-1) X^T y
-    const XT = math.transpose(X);
-    const XT_X = math.multiply(XT, X);
+    const XT = math.transpose(X); // p x n
+    const XT_X = math.multiply(XT, X); // p x p (plain array or Matrix)
+    const pDim = Array.isArray(XT_X) ? XT_X.length : XT_X.size()[0]; // handle arrays & mathjs Matrix
     const lambda = 0.001;
-    const I = math.identity(XT_X.size()[0]);
-    const inv = math.inv(math.add(XT_X, math.multiply(lambda, I)));
-    const XT_y = math.multiply(XT, y);
-    const beta = math.multiply(inv, XT_y);
-    const coef = beta.toArray().map((v) => v[0]);
+
+    // Ensure I has the same structure type as XT_X operations expect
+    const I = math.identity(pDim).toArray(); // force to plain array for compatibility
+
+    let inv;
+    try {
+      inv = math.inv(math.add(XT_X, math.multiply(lambda, I)));
+    } catch {
+      // Add tiny jitter if nearly singular
+      const jitter = math.multiply(1e-6, I);
+      inv = math.inv(
+        math.add(math.add(XT_X, math.multiply(lambda, I)), jitter)
+      );
+    }
+
+    const XT_y = math.multiply(XT, y); // p x 1
+    const beta = math.multiply(inv, XT_y); // p x 1
+    const coef = (Array.isArray(beta) ? beta : beta.toArray()).map((v) =>
+      Array.isArray(v) ? v[0] : v
+    );
     model.stations[code] = { coef };
   }
 

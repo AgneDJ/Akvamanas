@@ -1,134 +1,322 @@
-import React, { useState } from 'react'
-import { uploadExcel, trainExcel, forecast, downloadLatest, applySettings, getSettings } from './api'
+import { useEffect, useState } from "react";
+import {
+  getManifest,
+  getHealth,
+  uploadFile,
+  uploadFiles,
+  train,
+  forecast,
+  downloadLatest,
+} from "./api";
 
-export default function App(){
-  const [uploadInfo, setUploadInfo] = useState(null)
-  const [filePath, setFilePath] = useState('')
-  const [table, setTable] = useState([])
-  const [settingsMeta, setSettingsMeta] = useState(null)
-  const [busy, setBusy] = useState(false)
+export default function App() {
+  const [manifest, setManifest] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [table, setTable] = useState([]);
+  const [status, setStatus] = useState("");
 
-  const onUpload = async (e) => {
-    const f = e.target.files?.[0]
-    if (!f) return
-    setBusy(true)
-    const res = await uploadExcel(f)
-    setBusy(false)
-    setUploadInfo(res)
-    setFilePath(res.filePath)
-  }
+  const refreshManifest = async () => {
+    const { data } = await getManifest();
+    setManifest(data);
+  };
 
-  const onTrain = async (e) => {
-    const f = e.target.files?.[0]
-    if (!f) return
-    setBusy(true)
-    const res = await trainExcel(f)
-    setBusy(false)
-    alert(res.ok ? `Trained ${res.stations} station(s)` : res.error)
-  }
+  const ping = async () => {
+    try {
+      const { data } = await getHealth();
+      setStatus(data?.ok ? "Backend OK" : "Backend not responding");
+    } catch {
+      setStatus("Backend not responding");
+    }
+  };
 
-  const onSettings = async (e) => {
-    const f = e.target.files?.[0]
-    if (!f) return
-    setBusy(true)
-    const res = await applySettings(f)
-    setBusy(false)
-    setSettingsMeta(res)
-    if (!res.ok) alert(res.error)
-  }
+  useEffect(() => {
+    ping();
+    refreshManifest();
+  }, []);
 
-  const onGetSettings = async () => {
-    setBusy(true)
-    const res = await getSettings()
-    setBusy(false)
-    setSettingsMeta(res)
-  }
+  const handleUpload = async (url, file, field = "file") => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      await uploadFile(url, file, field);
+      await refreshManifest();
+    } catch (e) {
+      alert(e?.response?.data?.error || e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
-  const onForecast = async () => {
-    if (!filePath) { alert('First upload current inputs (Excel)'); return }
-    setBusy(true)
-    const res = await forecast(filePath)
-    setBusy(false)
-    if (!res.ok) { alert(res.error); return }
-    setTable(res.table || [])
-  }
+  const handleUploadHistorical = async (files) => {
+    if (!files || files.length === 0) return;
+    setBusy(true);
+    try {
+      await uploadFiles("/api/upload/historical", files, "files");
+      await refreshManifest();
+    } catch (e) {
+      alert(e?.response?.data?.error || e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleTrain = async () => {
+    setBusy(true);
+    setStatus("Training...");
+    try {
+      const { data } = await train();
+      setStatus(`Trained at: ${data.trainedAt} (stations: ${data.stations})`);
+    } catch (e) {
+      alert(e?.response?.data?.error || e.message);
+    } finally {
+      setBusy(false);
+      await refreshManifest();
+    }
+  };
+
+  const handleForecast = async () => {
+    setBusy(true);
+    setStatus("Calculating forecast...");
+    try {
+      const { data } = await forecast();
+      setTable(data.table || []);
+      setStatus("Forecast complete");
+    } catch (e) {
+      alert(e?.response?.data?.error || e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    try {
+      const res = await downloadLatest();
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "forecast.xlsx";
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(e?.response?.data?.error || e.message);
+    }
+  };
+
+  // Enable "Calculate forecast" when required inputs are present
+  const canForecast = !!(manifest?.metadata && manifest?.current?.water);
 
   return (
-    <div style={{ fontFamily:'Inter, system-ui, Arial', padding:20, maxWidth:1200, margin:'0 auto' }}>
-      <h1 style={{ marginBottom:8 }}>AKVAMANAS</h1>
-      <p style={{ marginTop:0, color:'#555' }}>User‑friendly Lithuanian river water level model (prototype).</p>
+    <div
+      style={{
+        fontFamily: "Inter, system-ui, Arial",
+        padding: 20,
+        maxWidth: 1200,
+        margin: "0 auto",
+      }}
+    >
+      <header style={{ display: "flex", alignItems: "baseline", gap: 16 }}>
+        <h1 style={{ margin: 0 }}>AKVAMANAS</h1>
+        <code style={{ opacity: 0.7 }}>{status}</code>
+      </header>
 
-      <section style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, marginTop:16 }}>
-        <div style={{ border:'1px solid #ddd', borderRadius:12, padding:16 }}>
-          <h3>1) Upload current inputs (Excel)</h3>
-          <input type="file" accept=".xlsx" onChange={onUpload} />
-          {uploadInfo?.ok && (
-            <p style={{ color:'#0a0' }}>
-              Loaded rows: {uploadInfo.currentInputsCount} (settings rows: {uploadInfo.settingsCount})<br/>
-              File: <code>{filePath}</code>
-            </p>
-          )}
-        </div>
+      <p style={{ marginTop: 6, opacity: 0.8 }}>
+        Upload Excel files, train (optional), then calculate 3-day water-level
+        forecasts. Required: <b>Station metadata</b> and{" "}
+        <b>Current water levels</b>. Precip/Air are optional but recommended.
+      </p>
 
-        <div style={{ border:'1px solid #ddd', borderRadius:12, padding:16 }}>
-          <h3>2) Train model (historical Excel)</h3>
-          <input type="file" accept=".xlsx" onChange={onTrain} />
-          <p style={{ fontSize:12, color:'#666' }}>Can be done anytime to improve per‑station coefficients.</p>
-        </div>
+      {/* Upload panels */}
+      <section
+        style={{
+          display: "grid",
+          gap: 12,
+          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+          marginTop: 12,
+        }}
+      >
+        <Card title="Station metadata">
+          <input
+            type="file"
+            accept=".xlsx"
+            onChange={(e) =>
+              handleUpload("/api/upload/metadata", e.target.files?.[0])
+            }
+            disabled={busy}
+          />
+          <Small>
+            Expect <code>stations_metadata.xlsx</code> (sheet{" "}
+            <code>stations_meta</code>)
+          </Small>
+          <Status ok={!!manifest?.metadata} />
+        </Card>
 
-        <div style={{ border:'1px solid #ddd', borderRadius:12, padding:16 }}>
-          <h3>3) Station settings</h3>
-          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-            <input type="file" accept=".xlsx" onChange={onSettings} />
-            <button onClick={onGetSettings}>Show current settings</button>
+        <Card title="Current water levels">
+          <input
+            type="file"
+            accept=".xlsx"
+            onChange={(e) =>
+              handleUpload("/api/upload/current/water", e.target.files?.[0])
+            }
+            disabled={busy}
+          />
+          <Small>
+            Sheet name: <code>water_levels</code>
+          </Small>
+          <Status ok={!!manifest?.current?.water} />
+        </Card>
+
+        <Card title="Current precipitation (optional)">
+          <input
+            type="file"
+            accept=".xlsx"
+            onChange={(e) =>
+              handleUpload("/api/upload/current/precip", e.target.files?.[0])
+            }
+            disabled={busy}
+          />
+          <Small>
+            Sheet name: <code>precip</code>
+          </Small>
+          <Status ok={!!manifest?.current?.precip} />
+        </Card>
+
+        <Card title="Current air temperature (optional)">
+          <input
+            type="file"
+            accept=".xlsx"
+            onChange={(e) =>
+              handleUpload("/api/upload/current/air", e.target.files?.[0])
+            }
+            disabled={busy}
+          />
+          <Small>
+            Sheet name: <code>air_temp</code>
+          </Small>
+          <Status ok={!!manifest?.current?.air} />
+        </Card>
+
+        <Card title="Historical (multiple files)">
+          <input
+            type="file"
+            accept=".xlsx"
+            multiple
+            onChange={(e) => handleUploadHistorical(e.target.files)}
+            disabled={busy}
+          />
+          <Small>
+            Per-station files; sheet <code>historical</code>
+          </Small>
+          <div style={{ marginTop: 6 }}>
+            Total files: <b>{manifest?.historical?.length || 0}</b>
           </div>
-          <pre style={{ background:'#f8f8f8', padding:8, borderRadius:8, maxHeight:160, overflow:'auto' }}>
-{JSON.stringify(settingsMeta, null, 2)}
-          </pre>
-        </div>
-
-        <div style={{ border:'1px solid #ddd', borderRadius:12, padding:16 }}>
-          <h3>4) Forecast</h3>
-          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-            <button onClick={onForecast} disabled={busy}>Calculate</button>
-            <button onClick={downloadLatest}>Download Excel</button>
-          </div>
-          {busy && <p>Processing...</p>}
-        </div>
+        </Card>
       </section>
 
-      <h3 style={{ marginTop:24 }}>Forecast table</h3>
-      <div style={{ overflowX:'auto' }}>
-        <table style={{ borderCollapse:'collapse', width:'100%' }}>
-          <thead>
-            <tr>
-              <th style={th}>River</th>
-              <th style={th}>Station</th>
-              <th style={th}>Today</th>
-              <th style={th}>Tomorrow</th>
-              <th style={th}>Day after</th>
-            </tr>
-          </thead>
-          <tbody>
-            {table.map((r,i)=>(
-              <tr key={i}>
-                <td style={td}>{r.river}</td>
-                <td style={td}>{r.station}</td>
-                <td style={td}>{r.wl_today_cm}</td>
-                <td style={td}>{r.wl_tomorrow_cm}</td>
-                <td style={td}>{r.wl_day_after_cm}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {/* Actions */}
+      <div
+        style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}
+      >
+        <button
+          onClick={handleTrain}
+          disabled={busy || (manifest?.historical?.length ?? 0) === 0}
+        >
+          Train model
+        </button>
+        <button onClick={handleForecast} disabled={busy || !canForecast}>
+          Calculate forecast
+        </button>
+        <button onClick={handleDownload} disabled={busy}>
+          Download Excel
+        </button>
+        <button
+          onClick={refreshManifest}
+          disabled={busy}
+          title="Re-read backend manifest"
+        >
+          Refresh status
+        </button>
       </div>
 
-      <p style={{ fontSize:12, color:'#666', marginTop:16 }}>
-        Dates generated: {table[0]?.date_today || '—'} (D), next two days automatically.
-      </p>
+      {/* Results */}
+      <h2 style={{ marginTop: 20 }}>Results</h2>
+      {table?.length ? (
+        <ResultsTable table={table} />
+      ) : (
+        <div style={{ opacity: 0.75 }}>No results yet.</div>
+      )}
     </div>
-  )
+  );
 }
 
-const th = { textAlign:'left', borderBottom:'1px solid #ddd', padding:'8px 6px' }
-const td = { borderBottom:'1px solid #eee', padding:'8px 6px' }
+/* ---------- Small UI helpers ---------- */
+
+function Card({ title, children }) {
+  return (
+    <div
+      style={{
+        border: "1px solid #ddd",
+        borderRadius: 10,
+        padding: 12,
+        background: "#fff",
+        boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+      }}
+    >
+      <h3 style={{ marginTop: 0 }}>{title}</h3>
+      {children}
+    </div>
+  );
+}
+
+function Small({ children }) {
+  return (
+    <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>{children}</div>
+  );
+}
+
+function Status({ ok }) {
+  return (
+    <div style={{ marginTop: 8, fontSize: 13 }}>
+      Loaded:{" "}
+      <b style={{ color: ok ? "#19734d" : "#a23c3c" }}>{ok ? "Yes" : "No"}</b>
+    </div>
+  );
+}
+
+function ResultsTable({ table }) {
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table
+        border="1"
+        cellPadding="6"
+        style={{
+          borderCollapse: "collapse",
+          width: "100%",
+          background: "#fff",
+        }}
+      >
+        <thead style={{ background: "#f5f5f7" }}>
+          <tr>
+            <th>River</th>
+            <th>Station</th>
+            <th>Date</th>
+            <th>WL Today (cm)</th>
+            <th>WL Tomorrow (cm)</th>
+            <th>WL +2 (cm)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {table.map((r, i) => (
+            <tr key={i}>
+              <td>{r.river}</td>
+              <td>{r.station}</td>
+              <td>{r.date_today}</td>
+              <td>{r.wl_today_cm}</td>
+              <td>{r.wl_tomorrow_cm}</td>
+              <td>{r.wl_day_after_cm}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
