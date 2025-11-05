@@ -1,5 +1,4 @@
 import XLSX from "xlsx";
-import fs from "fs";
 
 function num(v) {
   if (v === null || v === undefined || v === "") return null;
@@ -9,7 +8,7 @@ function num(v) {
 function parseHour(h) {
   if (h == null || h === "") return null;
   const s = String(h).trim();
-  if (s.match(/^\d{1,2}:\d{2}$/)) return s;
+  if (/^\d{1,2}:\d{2}$/.test(s)) return s;
   const n = Number(s);
   if (Number.isFinite(n)) return String(n).padStart(2, "0") + ":00";
   return null;
@@ -114,7 +113,6 @@ export function assembleForForecast(meta, water, precip, air) {
     metaByName.set(key(m.river_name, m.station_name), m);
   }
 
-  // pick latest water by station (date + hour)
   const latestWater = new Map();
   for (const w of water) {
     const k = w.station_code || key(w.river_name, w.station_name);
@@ -125,7 +123,6 @@ export function assembleForForecast(meta, water, precip, air) {
     }
   }
 
-  // latest precip (prefer station; fallback basin)
   const precipByStation = new Map();
   const precipByBasin = new Map();
   for (const p of precip) {
@@ -141,7 +138,6 @@ export function assembleForForecast(meta, water, precip, air) {
     }
   }
 
-  // latest air by station
   const airByStation = new Map();
   for (const a of air) {
     const stamp = `${a.date}T${a.hour_utc || "00:00"}Z`;
@@ -153,7 +149,7 @@ export function assembleForForecast(meta, water, precip, air) {
   }
 
   const currentInputs = [];
-  for (const [k, w] of latestWater.entries()) {
+  for (const [, w] of latestWater.entries()) {
     const m =
       (w.station_code && metaByCode.get(w.station_code)) ||
       metaByName.get(key(w.river_name, w.station_name)) ||
@@ -201,4 +197,59 @@ export function assembleForForecast(meta, water, precip, air) {
   }));
 
   return { currentInputs, settings };
+}
+
+/* -------- NEW READERS -------- */
+
+export function readNetworkReaches(filePath) {
+  const wb = XLSX.readFile(filePath);
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets["reaches"] || {}, {
+    defval: null,
+  });
+  return rows
+    .map((r) => ({
+      from_code: String(r.from_code || "").trim(),
+      to_code: String(r.to_code || "").trim(),
+      length_km: num(r.length_km),
+      slope_m_m: num(r.slope_m_m),
+      n_mann: num(r.n_mann),
+      width_m: num(r.width_m),
+      depth_m: num(r.depth_m),
+    }))
+    .filter((r) => r.from_code && r.to_code && r.length_km != null);
+}
+
+export function readRatingCurves(filePath) {
+  const wb = XLSX.readFile(filePath);
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets["rating"] || {}, {
+    defval: null,
+  });
+  const map = new Map();
+  for (const r of rows) {
+    const code = String(r.station_code || "").trim();
+    if (!code) continue;
+    map.set(code, {
+      h0_cm: num(r.h0_cm) ?? 0,
+      a: num(r.a) ?? 0.03,
+      b: num(r.b) ?? 1.6,
+    });
+  }
+  return map;
+}
+
+export function readBasinParams(filePath) {
+  const wb = XLSX.readFile(filePath);
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets["basins"] || {}, {
+    defval: null,
+  });
+  const map = new Map();
+  for (const r of rows) {
+    const name = String(r.basin_name || "").trim();
+    if (!name) continue;
+    map.set(name, {
+      runoff_coeff: num(r.runoff_coeff) ?? 0.2,
+      baseflow_cms: num(r.baseflow_cms) ?? 0,
+    });
+  }
+  return map;
 }

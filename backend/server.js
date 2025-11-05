@@ -1,3 +1,4 @@
+// backend/server.js
 import express from "express";
 import cors from "cors";
 import multer from "multer";
@@ -12,6 +13,9 @@ import {
   readCurrentAir,
   readHistoricalFile,
   assembleForForecast,
+  readNetworkReaches,
+  readRatingCurves,
+  readBasinParams,
 } from "./utils/excel.js";
 
 import {
@@ -28,7 +32,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const UPLOAD_DIR = path.join(__dirname, "uploads"); // original name restored
+const UPLOAD_DIR = path.join(__dirname, "uploads"); // keep original name
 const OUTPUT_DIR = path.join(__dirname, "output");
 const MODEL_DIR = path.join(__dirname, "model");
 for (const d of [UPLOAD_DIR, OUTPUT_DIR, MODEL_DIR]) {
@@ -42,31 +46,39 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 const MODEL_PATH = path.join(MODEL_DIR, "model.json");
-if (!fs.existsSync(MODEL_PATH))
+if (!fs.existsSync(MODEL_PATH)) {
   fs.writeFileSync(
     MODEL_PATH,
     JSON.stringify({ trainedAt: null, stations: {} }, null, 2),
     "utf8"
   );
-const MANIFEST_PATH = path.join(UPLOAD_DIR, "manifest.json");
+}
 
+const MANIFEST_PATH = path.join(UPLOAD_DIR, "manifest.json");
 function loadManifest() {
-  if (!fs.existsSync(MANIFEST_PATH))
+  if (!fs.existsSync(MANIFEST_PATH)) {
     return {
       metadata: null,
       current: { precip: null, water: null, air: null },
       historical: [],
     };
+  }
   return JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
 }
 function saveManifest(m) {
   fs.writeFileSync(MANIFEST_PATH, JSON.stringify(m, null, 2), "utf8");
 }
 
+// In-memory hydrology auxiliaries (reset on server restart)
+let HYDRO_AUX = { network: [], rating: new Map(), basins: new Map() };
+
+app.get("/", (req, res) => {
+  res.send("AKVAMANAS API is running. Try GET /api/health");
+});
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 app.get("/api/manifest", (req, res) => res.json(loadManifest()));
 
-// Upload sections (separate endpoints)
+/* ---------------- Uploads: metadata & current ---------------- */
 app.post("/api/upload/metadata", upload.single("file"), async (req, res) => {
   const m = loadManifest();
   m.metadata = req.file.path;
@@ -110,9 +122,10 @@ app.post("/api/upload/current/air", upload.single("file"), async (req, res) => {
   res.json({ ok: true, count: rows.length, path: req.file.path });
 });
 
+/* ---------------- Uploads: historical (multi-file) ---------------- */
 app.post(
   "/api/upload/historical",
-  upload.array("files", 100),
+  upload.array("files", 200),
   async (req, res) => {
     const m = loadManifest();
     m.historical = m.historical || [];
@@ -126,48 +139,26 @@ app.post(
   }
 );
 
-// Forecast uses the latest uploads in manifest
-app.post("/api/forecast", async (req, res) => {
-  try {
-    const m = loadManifest();
-    if (!m.metadata || !m.current?.water)
-      throw new Error("Missing metadata or current water levels uploads");
-    const meta = readStationsMeta(m.metadata);
-    const water = readCurrentWater(m.current.water);
-    const precip = m.current?.precip ? readCurrentPrecip(m.current.precip) : [];
-    const air = m.current?.air ? readCurrentAir(m.current.air) : [];
-    const { currentInputs, settings } = assembleForForecast(
-      meta,
-      water,
-      precip,
-      air
-    );
-
-    const model = await loadModel(MODEL_PATH);
-    const { rows, table } = await forecastWaterLevels(
-      currentInputs,
-      settings,
-      model
-    );
-
-    const outPath = path.join(
-      OUTPUT_DIR,
-      `forecast_${new Date().toISOString().slice(0, 10).replace(/-/g, "")}.xlsx`
-    );
-    const XLSX = (await import("xlsx")).default;
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "forecast");
-    XLSX.writeFile(wb, outPath);
-
-    res.json({ ok: true, outPath, table });
-  } catch (e) {
-    console.error(e);
-    res.status(400).json({ ok: false, error: e.message });
-  }
+/* ---------------- Uploads: hydrology auxiliaries ---------------- */
+app.post("/api/upload/network", upload.single("file"), async (req, res) => {
+  const rows = readNetworkReaches(req.file.path);
+  HYDRO_AUX.network = rows;
+  res.json({ ok: true, count: rows.length, path: req.file.path });
 });
 
-// Train from all historical files currently in manifest
+app.post("/api/upload/rating", upload.single("file"), async (req, res) => {
+  const map = readRatingCurves(req.file.path);
+  HYDRO_AUX.rating = map;
+  res.json({ ok: true, count: map.size, path: req.file.path });
+});
+
+app.post("/api/upload/basin", upload.single("file"), async (req, res) => {
+  const map = readBasinParams(req.file.path);
+  HYDRO_AUX.basins = map;
+  res.json({ ok: true, count: map.size, path: req.file.path });
+});
+
+/* ---------------- Train ---------------- */
 app.post("/api/train", async (req, res) => {
   try {
     const m = loadManifest();
@@ -188,7 +179,54 @@ app.post("/api/train", async (req, res) => {
   }
 });
 
-// Download latest forecast
+/* ---------------- Forecast ---------------- */
+app.post("/api/forecast", async (req, res) => {
+  try {
+    const m = loadManifest();
+    if (!m.metadata || !m.current?.water) {
+      throw new Error(
+        "Missing required uploads: metadata and current water levels."
+      );
+    }
+
+    const meta = readStationsMeta(m.metadata);
+    const water = readCurrentWater(m.current.water);
+    const precip = m.current?.precip ? readCurrentPrecip(m.current.precip) : [];
+    const air = m.current?.air ? readCurrentAir(m.current.air) : [];
+
+    const { currentInputs, settings } = assembleForForecast(
+      meta,
+      water,
+      precip,
+      air
+    );
+
+    const model = await loadModel(MODEL_PATH);
+    const { rows, table } = await forecastWaterLevels(
+      currentInputs,
+      settings,
+      model,
+      HYDRO_AUX
+    );
+
+    const outPath = path.join(
+      OUTPUT_DIR,
+      `forecast_${new Date().toISOString().slice(0, 10).replace(/-/g, "")}.xlsx`
+    );
+    const XLSX = (await import("xlsx")).default;
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "forecast");
+    XLSX.writeFile(wb, outPath);
+
+    res.json({ ok: true, outPath, table });
+  } catch (e) {
+    console.error(e);
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/* ---------------- Download latest forecast ---------------- */
 app.get("/api/download", async (req, res) => {
   try {
     const files = fs
@@ -208,6 +246,6 @@ app.get("/api/download", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () =>
-  console.log(`AKVAMANAS backend listening on http://localhost:${PORT}`)
-);
+app.listen(PORT, () => {
+  console.log(`AKVAMANAS backend listening on http://localhost:${PORT}`);
+});

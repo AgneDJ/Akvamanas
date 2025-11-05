@@ -123,6 +123,8 @@ export default function App() {
         Upload Excel files, train (optional), then calculate 3-day water-level
         forecasts. Required: <b>Station metadata</b> and{" "}
         <b>Current water levels</b>. Precip/Air are optional but recommended.
+        The hydrologic engine will also use Network / Rating / Basin files if
+        provided.
       </p>
 
       {/* Upload panels */}
@@ -209,6 +211,57 @@ export default function App() {
           <div style={{ marginTop: 6 }}>
             Total files: <b>{manifest?.historical?.length || 0}</b>
           </div>
+        </Card>
+
+        {/* NEW: Hydrology auxiliaries */}
+        <Card title="River network (reaches)">
+          <input
+            type="file"
+            accept=".xlsx"
+            onChange={(e) =>
+              handleUpload("/api/upload/network", e.target.files?.[0])
+            }
+            disabled={busy}
+          />
+          <Small>
+            Sheet name: <code>reaches</code>
+          </Small>
+          <Small>
+            Columns: from_code, to_code, length_km, slope_m_m, n_mann, width_m,
+            depth_m
+          </Small>
+        </Card>
+
+        <Card title="Rating curves">
+          <input
+            type="file"
+            accept=".xlsx"
+            onChange={(e) =>
+              handleUpload("/api/upload/rating", e.target.files?.[0])
+            }
+            disabled={busy}
+          />
+          <Small>
+            Sheet name: <code>rating</code>
+          </Small>
+          <Small>
+            Columns: station_code, h0_cm, a, b (Q = a·max(h−h0,0)^b)
+          </Small>
+        </Card>
+
+        <Card title="Basin parameters">
+          <input
+            type="file"
+            accept=".xlsx"
+            onChange={(e) =>
+              handleUpload("/api/upload/basin", e.target.files?.[0])
+            }
+            disabled={busy}
+          />
+          <Small>
+            Sheet name: <code>basins</code>
+          </Small>
+          <Small>Columns: basin_name, runoff_coeff, baseflow_cms</Small>
         </Card>
       </section>
 
