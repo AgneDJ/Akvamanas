@@ -1,3 +1,4 @@
+// frontend/src/App.jsx
 import { useEffect, useState } from "react";
 import {
   getManifest,
@@ -9,10 +10,22 @@ import {
   downloadLatest,
 } from "./api";
 
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+
 export default function App() {
   const [manifest, setManifest] = useState(null);
   const [busy, setBusy] = useState(false);
   const [table, setTable] = useState([]);
+  const [series, setSeries] = useState({});
+  const [hourly, setHourly] = useState([]); // NEW: flat hourly rows
   const [status, setStatus] = useState("");
 
   const refreshManifest = async () => {
@@ -23,7 +36,7 @@ export default function App() {
   const ping = async () => {
     try {
       const { data } = await getHealth();
-      setStatus(data?.ok ? "Backend OK" : "Backend not responding");
+      setStatus(data?.ok ? "" : "Backend not responding");
     } catch {
       setStatus("Backend not responding");
     }
@@ -80,6 +93,8 @@ export default function App() {
     try {
       const { data } = await forecast();
       setTable(data.table || []);
+      setSeries(data.series || {});
+      setHourly(data.hourly || []); // NEW
       setStatus("Forecast complete");
     } catch (e) {
       alert(e?.response?.data?.error || e.message);
@@ -102,7 +117,6 @@ export default function App() {
     }
   };
 
-  // Enable "Calculate forecast" when required inputs are present
   const canForecast = !!(manifest?.metadata && manifest?.current?.water);
 
   return (
@@ -110,7 +124,7 @@ export default function App() {
       style={{
         fontFamily: "Inter, system-ui, Arial",
         padding: 20,
-        maxWidth: 1200,
+        maxWidth: 1280,
         margin: "0 auto",
       }}
     >
@@ -119,13 +133,7 @@ export default function App() {
         <code style={{ opacity: 0.7 }}>{status}</code>
       </header>
 
-      <p style={{ marginTop: 6, opacity: 0.8 }}>
-        Upload Excel files, train (optional), then calculate 3-day water-level
-        forecasts. Required: <b>Station metadata</b> and{" "}
-        <b>Current water levels</b>. Precip/Air are optional but recommended.
-        The hydrologic engine will also use Network / Rating / Basin files if
-        provided.
-      </p>
+      <p style={{ marginTop: 6, opacity: 0.8 }}></p>
 
       {/* Upload panels */}
       <section
@@ -152,7 +160,7 @@ export default function App() {
           <Status ok={!!manifest?.metadata} />
         </Card>
 
-        <Card title="Current water levels">
+        <Card title="Current water levels (hourly)">
           <input
             type="file"
             accept=".xlsx"
@@ -162,12 +170,12 @@ export default function App() {
             disabled={busy}
           />
           <Small>
-            Sheet name: <code>water_levels</code>
+            Sheet: <code>water_levels</code>
           </Small>
           <Status ok={!!manifest?.current?.water} />
         </Card>
 
-        <Card title="Current precipitation (optional)">
+        <Card title="Current precipitation (hourly, optional)">
           <input
             type="file"
             accept=".xlsx"
@@ -177,12 +185,12 @@ export default function App() {
             disabled={busy}
           />
           <Small>
-            Sheet name: <code>precip</code>
+            Sheet: <code>precip</code>
           </Small>
           <Status ok={!!manifest?.current?.precip} />
         </Card>
 
-        <Card title="Current air temperature (optional)">
+        <Card title="Current air temperature (hourly, optional)">
           <input
             type="file"
             accept=".xlsx"
@@ -192,12 +200,12 @@ export default function App() {
             disabled={busy}
           />
           <Small>
-            Sheet name: <code>air_temp</code>
+            Sheet: <code>air_temp</code>
           </Small>
           <Status ok={!!manifest?.current?.air} />
         </Card>
 
-        <Card title="Historical (multiple files)">
+        <Card title="Historical (multiple files, hourly)">
           <input
             type="file"
             accept=".xlsx"
@@ -213,7 +221,7 @@ export default function App() {
           </div>
         </Card>
 
-        {/* NEW: Hydrology auxiliaries */}
+        {/* Hydrology auxiliaries */}
         <Card title="River network (reaches)">
           <input
             type="file"
@@ -224,7 +232,7 @@ export default function App() {
             disabled={busy}
           />
           <Small>
-            Sheet name: <code>reaches</code>
+            Sheet: <code>reaches</code>
           </Small>
           <Small>
             Columns: from_code, to_code, length_km, slope_m_m, n_mann, width_m,
@@ -242,11 +250,9 @@ export default function App() {
             disabled={busy}
           />
           <Small>
-            Sheet name: <code>rating</code>
+            Sheet: <code>rating</code>
           </Small>
-          <Small>
-            Columns: station_code, h0_cm, a, b (Q = a·max(h−h0,0)^b)
-          </Small>
+          <Small>Columns: station_code, h0_cm, a, b</Small>
         </Card>
 
         <Card title="Basin parameters">
@@ -259,7 +265,7 @@ export default function App() {
             disabled={busy}
           />
           <Small>
-            Sheet name: <code>basins</code>
+            Sheet: <code>basins</code>
           </Small>
           <Small>Columns: basin_name, runoff_coeff, baseflow_cms</Small>
         </Card>
@@ -290,12 +296,34 @@ export default function App() {
         </button>
       </div>
 
-      {/* Results */}
-      <h2 style={{ marginTop: 20 }}>Results</h2>
+      {/* Daily table */}
+      <h2 style={{ marginTop: 20 }}>Daily Results</h2>
       {table?.length ? (
         <ResultsTable table={table} />
       ) : (
         <div style={{ opacity: 0.75 }}>No results yet.</div>
+      )}
+
+      {/* Hourly charts */}
+      <h2 style={{ marginTop: 24 }}>Hourly Forecast (next 72h)</h2>
+      <div
+        style={{
+          display: "grid",
+          gap: 16,
+          gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
+        }}
+      >
+        {Object.entries(series).map(([code, points]) => (
+          <StationChart key={code} code={code} points={points} />
+        ))}
+      </div>
+
+      {/* Hourly table (flat) */}
+      <h2 style={{ marginTop: 24 }}>Hourly Table (UTC)</h2>
+      {hourly?.length ? (
+        <HourlyTable rows={hourly} />
+      ) : (
+        <div style={{ opacity: 0.75 }}>No hourly rows yet.</div>
       )}
     </div>
   );
@@ -352,9 +380,9 @@ function ResultsTable({ table }) {
             <th>River</th>
             <th>Station</th>
             <th>Date</th>
-            <th>WL Today (cm)</th>
-            <th>WL Tomorrow (cm)</th>
-            <th>WL +2 (cm)</th>
+            <th>WL +1 Day (cm)</th>
+            <th>WL +2 Day (cm)</th>
+            <th>WL +3 Day (cm)</th>
           </tr>
         </thead>
         <tbody>
@@ -366,6 +394,118 @@ function ResultsTable({ table }) {
               <td>{r.wl_today_cm}</td>
               <td>{r.wl_tomorrow_cm}</td>
               <td>{r.wl_day_after_cm}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ------------ Chart: x = water level, y = hour (vertical layout) ------------ */
+
+/* ------------ Chart: x = datetime (hour), y = water level (cm) ------------ */
+
+function StationChart({ code, points }) {
+  if (!points?.length) return null;
+  const title = `${points[0]?.river_name || ""} – ${
+    points[0]?.station_name || ""
+  } (${code})`;
+
+  return (
+    <div
+      style={{
+        border: "1px solid #eee",
+        borderRadius: 10,
+        padding: 12,
+        background: "#fff",
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: 8 }}>{title}</div>
+      <ResponsiveContainer width="100%" height={260}>
+        <LineChart
+          data={points}
+          margin={{ left: 20, right: 20, top: 10, bottom: 10 }}
+        >
+          <CartesianGrid strokeDasharray="3 3" />
+          {/* X axis = datetime label */}
+          <XAxis
+            dataKey="hour"
+            tickFormatter={(v) => v}
+            label={{
+              value: "Laikas (Vietinis)",
+              position: "insideBottom",
+              offset: -5,
+            }}
+          />
+          {/* Y axis = water level (cm) */}
+          <YAxis
+            dataKey="wl_cm"
+            label={{
+              value: "Water level (cm)",
+              angle: -90,
+              position: "insideLeft",
+            }}
+          />
+          <Tooltip
+            formatter={(value, name) => {
+              if (name === "wl_cm") return [`${value} cm`, "Water level"];
+              return [value, name];
+            }}
+            labelFormatter={(_, payload) => {
+              const p = payload?.[0]?.payload;
+              return `${p?.t?.slice(0, 16).replace("T", " ")} UTC`;
+            }}
+          />
+          <Line
+            type="monotone"
+            dataKey="wl_cm"
+            stroke="#0074D9"
+            dot={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+      <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>
+        x: Laikas &nbsp;|&nbsp; y: Vandens lygis (cm)
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Hourly flat table ---------------- */
+
+function HourlyTable({ rows }) {
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table
+        border="1"
+        cellPadding="6"
+        style={{
+          borderCollapse: "collapse",
+          width: "100%",
+          background: "#fff",
+        }}
+      >
+        <thead style={{ background: "#f5f5f7" }}>
+          <tr>
+            <th>DateTime (Vietinis)</th>
+            <th>Date</th>
+            <th>River</th>
+            <th>Station</th>
+            <th>Code</th>
+            <th>WL (cm)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}>
+              <td>{r.forecast_datetime}</td>
+              <td>{r.forecast_date}</td>
+              <td>{r.river_name}</td>
+              <td>{r.station_name}</td>
+              <td>{r.station_code}</td>
+              <td>{r.forecast_water_level_cm}</td>
             </tr>
           ))}
         </tbody>
