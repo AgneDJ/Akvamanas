@@ -1,0 +1,38 @@
+{
+  "metadata": "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343262692-stations_metadata.xlsx",
+  "current": {
+    "precip": "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343248990-current_precipitation.xlsx",
+    "water": "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343243425-current_water_levels.xlsx",
+    "air": "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343252848-current_air_temperature.xlsx"
+  },
+  "historical": [
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762335650262-60004LT.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762335650262-Druskininkai.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762335650262-JaÅ¡iÅ«nai.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762335650264-Kudirkos_Naumiestis.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762335650264-NemajÅ«nai.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762335650264-PuvoÄiai.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762335650265-VerbyliÅ¡kÄs.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343069247-historical_101.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343069247-historical_102.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343069247-historical_103.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343069248-historical_104.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343069248-historical_105.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343069249-historical_106.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343069249-historical_769.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343237419-60004LT.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343237419-Druskininkai.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343237419-historical_101.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343237421-historical_102.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343237421-historical_103.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343237422-historical_104.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343237422-historical_105.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343237422-historical_106.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343237422-historical_769.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343237422-JaÅ¡iÅ«nai.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343237422-Kudirkos_Naumiestis.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343237422-NemajÅ«nai.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343237426-PuvoÄiai.xlsx",
+    "C:\\Users\\agned\\OneDrive\\Desktop\\AKVAMANAS\\backend\\uploads\\1762343237426-VerbyliÅ¡kÄs.xlsx"
+  ]
+}
