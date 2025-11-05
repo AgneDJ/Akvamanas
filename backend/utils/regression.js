@@ -4,7 +4,6 @@ import fs from "fs";
 
 const math = create(all, {});
 
-// Model schema: { trainedAt, stations: { [station_code]: { coef: number[] } } }
 export async function loadModel(modelPath) {
   return JSON.parse(fs.readFileSync(modelPath, "utf8"));
 }
@@ -13,7 +12,6 @@ export async function saveModel(modelPath, model) {
 }
 
 function designRow(r) {
-  // [1, WL, precip, airT, windSpd, windDir, RH, roughness]
   return [
     1,
     num(r.water_level_cm),
@@ -32,29 +30,46 @@ function num(v) {
   return Number.isFinite(n) ? n : null;
 }
 
-// Train per-station simple multivariate regression: predict D+1 WL from D features
-export async function trainModelFromHistorical(filePath, model) {
-  const wb = XLSX.readFile(filePath);
-  const hist = XLSX.utils.sheet_to_json(wb.Sheets["historical"] || {}, {
-    defval: null,
-  });
+export async function trainModelFromHistoricalFiles(filePaths, model) {
+  let all = [];
+  for (const p of filePaths) {
+    try {
+      const wb = XLSX.readFile(p);
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets["historical"] || {}, {
+        defval: null,
+      });
+      all = all.concat(rows);
+    } catch {}
+  }
+  return trainFromRows(all, model);
+}
 
+function trainFromRows(hist, model) {
   const byStation = new Map();
   for (const r of hist) {
     const code = String(r.station_code || "").trim();
     if (!code) continue;
     if (!byStation.has(code)) byStation.set(code, []);
-    byStation.get(code).push(r);
+    byStation.get(code).push({
+      date: r.datetime_utc || r.date || null,
+      station_code: code,
+      water_level_cm: num(r.water_level_cm),
+      precipitation_mm: num(r.precipitation_mm),
+      air_temp_c: num(r.air_temp_c),
+      wind_speed_mps: null,
+      wind_dir_deg: null,
+      rh_pct: null,
+      roughness_n: null,
+    });
   }
 
   for (const [code, rows] of byStation.entries()) {
     const X = [];
     const y = [];
     rows.sort((a, b) => new Date(a.date) - new Date(b.date));
-
     for (let i = 0; i < rows.length - 1; i++) {
-      const today = rows[i];
-      const tomorrow = rows[i + 1];
+      const today = rows[i],
+        tomorrow = rows[i + 1];
       if (
         String(today.station_code).trim() !==
         String(tomorrow.station_code).trim()
@@ -68,16 +83,15 @@ export async function trainModelFromHistorical(filePath, model) {
     }
     if (X.length < 5) continue;
 
-    // (X^T X + λI)^(-1) X^T y
+    // Ridge: (X^T X + λI)^(-1) X^T y
     const XT = math.transpose(X);
     const XT_X = math.multiply(XT, X);
     const lambda = 0.001;
     const I = math.identity(XT_X.size()[0]);
     const inv = math.inv(math.add(XT_X, math.multiply(lambda, I)));
     const XT_y = math.multiply(XT, y);
-    const beta = math.multiply(inv, XT_y); // 8x1
-
-    const coef = beta.toArray().map((v) => v[0]); // includes intercept
+    const beta = math.multiply(inv, XT_y);
+    const coef = beta.toArray().map((v) => v[0]);
     model.stations[code] = { coef };
   }
 
@@ -87,7 +101,8 @@ export async function trainModelFromHistorical(filePath, model) {
 
 export async function forecastWaterLevels(currentInputs, settings, model) {
   const settingsMap = new Map();
-  for (const s of settings) settingsMap.set(String(s.station_code).trim(), s);
+  for (const s of settings)
+    settingsMap.set(String(s.station_code || "").trim(), s);
 
   const rows = [];
   const table = [];
@@ -99,40 +114,41 @@ export async function forecastWaterLevels(currentInputs, settings, model) {
 
   const byStation = new Map();
   for (const r of currentInputs) {
-    const code = String(r.station_code || "").trim();
+    const code =
+      String(r.station_code || "").trim() ||
+      String(r.station_name || "").trim();
     if (!code) continue;
     byStation.set(code, r);
   }
 
   for (const [code, r] of byStation.entries()) {
-    const s = settingsMap.get(code) || {};
-    const coef = model.stations?.[code]?.coef || null;
+    const s = settingsMap.get(String(r.station_code || "").trim()) || {};
+    const coef =
+      model.stations?.[String(r.station_code || "").trim()]?.coef || null;
 
     const x0 = designRow(r);
-    const base = (vec, coef) => {
-      if (!coef) {
-        // Fallback: persistence + clamp + datum offset
-        const wl = clamp(
-          (r.water_level_cm ?? 0) + (s.datum_offset_cm ?? 0),
-          s.min_level_cm,
-          s.max_level_cm
-        );
-        return [wl, wl, wl];
-      }
-      const pred1 = dot(coef, x0);
-      const pred2 = pred1 * 0.98 + (r.air_temp_c ?? 0) * 0.1;
-      const pred3 = pred2 * 0.98;
-      return [pred1, pred2, pred3].map((v) =>
-        clamp(v + (s.datum_offset_cm ?? 0), s.min_level_cm, s.max_level_cm)
-      );
-    };
-
-    const preds = base(x0, coef);
+    const preds = !coef
+      ? (() => {
+          const wl = clamp(
+            (r.water_level_cm ?? 0) + (s.datum_offset_cm ?? 0),
+            s.min_level_cm,
+            s.max_level_cm
+          );
+          return [wl, wl, wl];
+        })()
+      : (() => {
+          const p1 = dot(coef, x0);
+          const p2 = p1 * 0.98 + (r.air_temp_c ?? 0) * 0.1;
+          const p3 = p2 * 0.98;
+          return [p1, p2, p3].map((v) =>
+            clamp(v + (s.datum_offset_cm ?? 0), s.min_level_cm, s.max_level_cm)
+          );
+        })();
 
     for (let i = 0; i < 3; i++) {
       rows.push({
         forecast_date: dates[i].toISOString().slice(0, 10),
-        station_code: code,
+        station_code: r.station_code || "",
         station_name: r.station_name || s.station_name || "",
         river_name: r.river_name || s.river_name || "",
         forecast_water_level_cm: Math.round((preds[i] ?? 0) * 10) / 10,
@@ -151,7 +167,7 @@ export async function forecastWaterLevels(currentInputs, settings, model) {
 
   rows.sort(
     (a, b) =>
-      a.station_code.localeCompare(b.station_code) ||
+      String(a.station_code).localeCompare(String(b.station_code)) ||
       a.forecast_date.localeCompare(b.forecast_date)
   );
   table.sort(

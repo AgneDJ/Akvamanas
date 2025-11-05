@@ -6,12 +6,16 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 
 import {
-  loadInputsFromExcel,
-  writeForecastToExcel,
-  readStationsFromExcel,
+  readStationsMeta,
+  readCurrentPrecip,
+  readCurrentWater,
+  readCurrentAir,
+  readHistoricalFile,
+  assembleForForecast,
 } from "./utils/excel.js";
+
 import {
-  trainModelFromHistorical,
+  trainModelFromHistoricalFiles,
   forecastWaterLevels,
   loadModel,
   saveModel,
@@ -24,7 +28,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const UPLOAD_DIR = path.join(__dirname, "uploads");
+const UPLOAD_DIR = path.join(__dirname, "uploads"); // original name restored
 const OUTPUT_DIR = path.join(__dirname, "output");
 const MODEL_DIR = path.join(__dirname, "model");
 for (const d of [UPLOAD_DIR, OUTPUT_DIR, MODEL_DIR]) {
@@ -44,53 +48,102 @@ if (!fs.existsSync(MODEL_PATH))
     JSON.stringify({ trainedAt: null, stations: {} }, null, 2),
     "utf8"
   );
+const MANIFEST_PATH = path.join(UPLOAD_DIR, "manifest.json");
+
+function loadManifest() {
+  if (!fs.existsSync(MANIFEST_PATH))
+    return {
+      metadata: null,
+      current: { precip: null, water: null, air: null },
+      historical: [],
+    };
+  return JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
+}
+function saveManifest(m) {
+  fs.writeFileSync(MANIFEST_PATH, JSON.stringify(m, null, 2), "utf8");
+}
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));
+app.get("/api/manifest", (req, res) => res.json(loadManifest()));
 
-// Upload CURRENT INPUTS Excel (either classic template or extended template)
-app.post("/api/upload", upload.single("file"), async (req, res) => {
-  try {
-    const filePath = req.file.path;
-    const { currentInputs, settings } = await loadInputsFromExcel(filePath);
-    return res.json({
-      ok: true,
-      filePath,
-      currentInputsCount: currentInputs.length,
-      settingsCount: settings.length,
-    });
-  } catch (e) {
-    console.error(e);
-    return res.status(400).json({ ok: false, error: e.message });
-  }
+// Upload sections (separate endpoints)
+app.post("/api/upload/metadata", upload.single("file"), async (req, res) => {
+  const m = loadManifest();
+  m.metadata = req.file.path;
+  saveManifest(m);
+  const rows = readStationsMeta(req.file.path);
+  res.json({ ok: true, count: rows.length, path: req.file.path });
 });
 
-// Train from HISTORICAL Excel
-app.post("/api/train", upload.single("file"), async (req, res) => {
-  try {
-    const filePath = req.file.path;
-    const model = await loadModel(MODEL_PATH);
-    const updated = await trainModelFromHistorical(filePath, model);
-    await saveModel(MODEL_PATH, updated);
-    return res.json({
-      ok: true,
-      trainedAt: updated.trainedAt,
-      stations: Object.keys(updated.stations).length,
-    });
-  } catch (e) {
-    console.error(e);
-    return res.status(400).json({ ok: false, error: e.message });
+app.post(
+  "/api/upload/current/precip",
+  upload.single("file"),
+  async (req, res) => {
+    const m = loadManifest();
+    m.current = m.current || {};
+    m.current.precip = req.file.path;
+    saveManifest(m);
+    const rows = readCurrentPrecip(req.file.path);
+    res.json({ ok: true, count: rows.length, path: req.file.path });
   }
+);
+
+app.post(
+  "/api/upload/current/water",
+  upload.single("file"),
+  async (req, res) => {
+    const m = loadManifest();
+    m.current = m.current || {};
+    m.current.water = req.file.path;
+    saveManifest(m);
+    const rows = readCurrentWater(req.file.path);
+    res.json({ ok: true, count: rows.length, path: req.file.path });
+  }
+);
+
+app.post("/api/upload/current/air", upload.single("file"), async (req, res) => {
+  const m = loadManifest();
+  m.current = m.current || {};
+  m.current.air = req.file.path;
+  saveManifest(m);
+  const rows = readCurrentAir(req.file.path);
+  res.json({ ok: true, count: rows.length, path: req.file.path });
 });
 
-// Run forecast (3 days) and write Excel output
+app.post(
+  "/api/upload/historical",
+  upload.array("files", 100),
+  async (req, res) => {
+    const m = loadManifest();
+    m.historical = m.historical || [];
+    for (const f of req.files) m.historical.push(f.path);
+    saveManifest(m);
+    res.json({
+      ok: true,
+      files: req.files.map((f) => f.path),
+      total: m.historical.length,
+    });
+  }
+);
+
+// Forecast uses the latest uploads in manifest
 app.post("/api/forecast", async (req, res) => {
   try {
-    const { filePath } = req.body;
-    if (!filePath || !fs.existsSync(filePath))
-      throw new Error("Missing or invalid filePath");
+    const m = loadManifest();
+    if (!m.metadata || !m.current?.water)
+      throw new Error("Missing metadata or current water levels uploads");
+    const meta = readStationsMeta(m.metadata);
+    const water = readCurrentWater(m.current.water);
+    const precip = m.current?.precip ? readCurrentPrecip(m.current.precip) : [];
+    const air = m.current?.air ? readCurrentAir(m.current.air) : [];
+    const { currentInputs, settings } = assembleForForecast(
+      meta,
+      water,
+      precip,
+      air
+    );
 
     const model = await loadModel(MODEL_PATH);
-    const { currentInputs, settings } = await loadInputsFromExcel(filePath);
     const { rows, table } = await forecastWaterLevels(
       currentInputs,
       settings,
@@ -101,16 +154,41 @@ app.post("/api/forecast", async (req, res) => {
       OUTPUT_DIR,
       `forecast_${new Date().toISOString().slice(0, 10).replace(/-/g, "")}.xlsx`
     );
-    await writeForecastToExcel(outPath, rows);
+    const XLSX = (await import("xlsx")).default;
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "forecast");
+    XLSX.writeFile(wb, outPath);
 
-    return res.json({ ok: true, outPath, table });
+    res.json({ ok: true, outPath, table });
   } catch (e) {
     console.error(e);
-    return res.status(400).json({ ok: false, error: e.message });
+    res.status(400).json({ ok: false, error: e.message });
   }
 });
 
-// Download latest forecast Excel
+// Train from all historical files currently in manifest
+app.post("/api/train", async (req, res) => {
+  try {
+    const m = loadManifest();
+    const model = await loadModel(MODEL_PATH);
+    const updated = await trainModelFromHistoricalFiles(
+      m.historical || [],
+      model
+    );
+    await saveModel(MODEL_PATH, updated);
+    res.json({
+      ok: true,
+      trainedAt: updated.trainedAt,
+      stations: Object.keys(updated.stations).length,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+// Download latest forecast
 app.get("/api/download", async (req, res) => {
   try {
     const files = fs
@@ -127,50 +205,6 @@ app.get("/api/download", async (req, res) => {
   } catch (e) {
     res.status(500).send(e.message);
   }
-});
-
-// Station settings (upload stations.xlsx with the "stations" sheet)
-app.post("/api/settings", upload.single("file"), async (req, res) => {
-  try {
-    if (!req.file)
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error: "Upload stations_template.xlsx with the new settings",
-        });
-    const settings = await readStationsFromExcel(req.file.path);
-    const settingsPath = path.join(MODEL_DIR, "stations_settings.json");
-    fs.writeFileSync(
-      settingsPath,
-      JSON.stringify(
-        { updatedAt: new Date().toISOString(), settings },
-        null,
-        2
-      ),
-      "utf8"
-    );
-    return res.json({
-      ok: true,
-      updatedAt: new Date().toISOString(),
-      count: settings.length,
-    });
-  } catch (e) {
-    console.error(e);
-    return res.status(400).json({ ok: false, error: e.message });
-  }
-});
-
-// Get current station settings snapshot
-app.get("/api/settings", async (req, res) => {
-  const settingsPath = path.join(MODEL_DIR, "stations_settings.json");
-  if (!fs.existsSync(settingsPath)) return res.json({ ok: true, settings: [] });
-  const raw = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  return res.json({
-    ok: true,
-    settings: raw.settings,
-    updatedAt: raw.updatedAt,
-  });
 });
 
 const PORT = process.env.PORT || 4000;
